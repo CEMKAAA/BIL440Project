@@ -363,3 +363,400 @@ def rewrite_query_with_context(question: str, history: list[dict] = []) -> str:
         return rewritten
     else:
         return question
+
+search_knowledge_base_json = {
+    "name": "search_knowledge_base",
+    "description": "Search the uploaded documents knowledge base for information. Use this when you need factual information from the uploaded documents.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "The search query to find relevant information in the knowledge base"
+            }
+        },
+        "required": ["query"],
+        "additionalProperties": False
+    }
+}
+
+tools = [
+    {"type": "function", "function": search_knowledge_base_json}
+]
+
+def create_ollama_tool_prompt(question: str, history: list[dict] = [], tool_results: str = None):
+    """Create a prompt that instructs Ollama to use tools."""
+    
+    available_tools = """
+AVAILABLE TOOLS:
+
+1. search_knowledge_base(query: str)
+   - Use this FIRST for questions about information in uploaded documents
+   - IMPORTANT: When searching, use specific keywords from the question
+   - For "current company" questions, search for: "company", "employer", "work", "current job"
+   - Example: {{"name": "search_knowledge_base", "arguments": {{"query": "current company employer workplace"}}}}
+
+TOOL CALLING FORMAT:
+If you need a tool, output ONLY this JSON (no other text):
+{{"name": "tool_name", "arguments": {{"arg": "value"}}}}
+"""
+    
+    # Build context from history
+    context_str = ""
+    if history:
+        context_str = "\nPrevious conversation:\n"
+        for msg in history[-4:]:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+            if role == "user":
+                context_str += f"User: {content}\n"
+            elif role == "assistant":
+                context_str += f"Assistant: {content}\n"
+    
+    # Format tool results with better emphasis on finding exact answers
+    if tool_results:
+        try:
+            result_data = json.loads(tool_results)
+            if isinstance(result_data, dict) and "results" in result_data:
+                # Format results more clearly
+                results_text = ""
+                for idx, res in enumerate(result_data.get("results", [])[:5], 1):  # Limit to top 5
+                    content = res.get("content", "")[:500]  # Limit content length
+                    source = res.get("source", "unknown")
+                    results_text += f"\n--- Result {idx} (from {source}) ---\n{content}\n"
+                
+                formatted_result = f"""
+TOOL RESULT RECEIVED - READ CAREFULLY:
+
+Original Question: {result_data.get('original_question', question)}
+
+{results_text}
+
+CRITICAL INSTRUCTIONS:
+1. Read ALL the results above carefully
+2. Find the EXACT answer to the question: "{question}"
+3. If the question asks for a "company name", look for company names, employer names, or workplace names
+4. If the question asks "what is the name of the company", extract ONLY the company name, not other names
+5. Answer directly and concisely - do NOT include explanations unless asked
+6. DO NOT call any more tools - you have all the information you need
+"""
+            else:
+                formatted_result = f"""
+TOOL RESULT RECEIVED:
+{json.dumps(result_data, indent=2, ensure_ascii=False)[:2000]}
+
+CRITICAL: Read the results above and find the EXACT answer to: "{question}"
+Answer directly - do NOT call more tools.
+"""
+        except:
+            formatted_result = f"""
+TOOL RESULT RECEIVED:
+{tool_results[:2000]}
+
+CRITICAL: Based on the results above, answer the question: "{question}"
+Answer directly and concisely.
+"""
+        
+        tool_results_str = formatted_result
+    else:
+        # Improve initial query generation
+        question_lower = question.lower()
+        query_hints = ""
+        
+        if any(word in question_lower for word in ['company', 'employer', 'work']):
+            query_hints = "\nQUERY HINT: For company/employer questions, search for terms like: 'company', 'employer', 'workplace', 'current job', 'working at'"
+        elif any(word in question_lower for word in ['name']):
+            query_hints = "\nQUERY HINT: For name questions, search for the specific type of name mentioned (company name, person name, etc.)"
+        
+        tool_results_str = f"""
+PRIORITY: This is a knowledge question. Use search_knowledge_base FIRST to find information in the uploaded documents.
+{query_hints}
+IMPORTANT: When calling search_knowledge_base, extract key terms from the question and use them in your search query.
+"""
+    
+    prompt = f"""You are an AI assistant helping users with questions about documents they have uploaded.
+
+{available_tools}
+
+{context_str}
+
+User's question: {question}
+{tool_results_str}
+
+ANSWERING INSTRUCTIONS:
+- Read the retrieved documents VERY carefully
+- Find the EXACT information that answers the question
+- If asked for a "company name", extract ONLY the company/employer name, not person names
+- If asked "what is the name of the company I am currently working in", look for sections about current employment, work experience, or job information
+- Answer directly and concisely - just provide the requested information
+- If the information is not found, say "I couldn't find this information in the uploaded documents"
+
+DECISION:
+- If you need more information → Output JSON tool call
+- If you have enough information → Answer the question directly (NO JSON, just your answer)"""
+    
+    return prompt
+
+def parse_ollama_tool_call(response_text: str):
+    """Parse tool call from Ollama response (manual tool calling)."""
+    response_text = response_text.strip()
+    
+    # Check if this looks like JSON (tool call)
+    if response_text.startswith("{") or response_text.startswith("{{"):
+        pass
+    else:
+        # Check if this looks like natural language
+        natural_language_patterns = [
+            r'^The\s+\w+\s+',
+            r'^For\s+',
+            r'^Based\s+on',
+            r'^According\s+to',
+            r'^I\s+',
+        ]
+        
+        is_natural_language = any(re.match(pattern, response_text, re.IGNORECASE) for pattern in natural_language_patterns)
+        
+        if is_natural_language and len(response_text) > 50:
+            json_patterns = [
+                r'```json\s*(\{.*?\})\s*```',
+                r'```\s*(\{.*?"name".*?\})\s*```',
+            ]
+            for pattern in json_patterns:
+                match = re.search(pattern, response_text, re.DOTALL | re.IGNORECASE)
+                if match:
+                    try:
+                        tool_call = json.loads(match.group(1))
+                        if "name" in tool_call or "tool" in tool_call:
+                            return tool_call
+                    except:
+                        continue
+            return None
+    
+    # Look for explicit JSON tool call patterns
+    patterns = [
+        r'```json\s*(\{.*?\})\s*```',
+        r'```json\s*(\{\{.*?\}\})\s*```',
+        r'```\s*(\{.*?"name".*?"arguments".*?\})\s*```',
+        r'^\s*\{[^{]*"name"[^{]*"arguments"[^{]*\}\s*$',
+    ]
+    
+    for pattern in patterns:
+        matches = re.finditer(pattern, response_text, re.DOTALL | re.IGNORECASE)
+        for match in matches:
+            try:
+                json_str = match.group(1) if match.groups() else match.group(0)
+                json_str = json_str.replace("{{", "{").replace("}}", "}")
+                tool_call = json.loads(json_str)
+                
+                if "name" in tool_call:
+                    return tool_call
+                elif "tool" in tool_call:
+                    return {"name": tool_call["tool"], "arguments": tool_call.get("arguments", {})}
+            except json.JSONDecodeError:
+                continue
+    
+    # Try parsing entire response as JSON
+    looks_like_json = (response_text.startswith("{") or response_text.startswith("{{")) and len(response_text) < 500
+    
+    if looks_like_json:
+        try:
+            json_str = response_text.replace("{{", "{").replace("}}", "}")
+            tool_call = json.loads(json_str)
+            if "name" in tool_call or "tool" in tool_call:
+                if "name" in tool_call:
+                    return tool_call
+                else:
+                    return {"name": tool_call["tool"], "arguments": tool_call.get("arguments", {})}
+        except:
+            pass
+    
+    return None
+
+def answer_question_with_ollama(question: str, history: list[dict] = []) -> tuple[str, list[Document]]:
+    """Answer question using Ollama with manual tool calling."""
+    if not ollama_llm:
+        return "Ollama is not available. Please make sure Ollama is running.", []
+    
+    docs = []
+    max_iterations = 10
+    iteration = 0
+    
+    original_question = question
+    tool_results = None
+    tools_used = []
+    
+    # Auto-detect if this is a knowledge question that needs RAG
+    knowledge_keywords = ['what', 'who', 'where', 'when', 'which', 'name', 'company', 'employer', 'work', 'current']
+    is_knowledge_question = any(keyword in question.lower() for keyword in knowledge_keywords)
+    
+    # For knowledge questions, automatically do an initial search
+    if is_knowledge_question and iteration == 0:
+        print(f"🔍 Auto-detected knowledge question, performing initial search...", flush=True)
+        try:
+            # Create optimized search query
+            question_lower = question.lower()
+            search_terms = []
+            
+            # Extract important terms
+            if 'company' in question_lower or 'employer' in question_lower:
+                search_terms.extend(['company', 'employer', 'workplace', 'working at'])
+            if 'current' in question_lower:
+                search_terms.extend(['current', 'present', 'now'])
+            if 'name' in question_lower:
+                search_terms.append('name')
+            
+            # Use expanded query or original
+            search_query = " ".join(search_terms) if search_terms else question
+            
+            docs = fetch_context(search_query, use_mmr=True)
+            if docs:
+                result = {
+                    "query": search_query,
+                    "original_question": question,
+                    "results": [
+                        {
+                            "content": doc.page_content,
+                            "source": doc.metadata.get("source", "unknown"),
+                            "metadata": doc.metadata
+                        } for doc in docs
+                    ],
+                    "count": len(docs),
+                    "message": f"Found {len(docs)} relevant document chunks. Read them carefully to find the exact answer."
+                }
+                tool_results = json.dumps(result, default=str, ensure_ascii=False)
+                tools_used.append("search_knowledge_base")
+                iteration = 1  # Skip first iteration since we already have results
+                print(f"✅ Auto-retrieved {len(docs)} documents", flush=True)
+        except Exception as e:
+            print(f"⚠️  Auto-search failed: {e}, continuing with normal flow", flush=True)
+    
+    while iteration < max_iterations:
+        iteration += 1
+        
+        # Create prompt with tool instructions
+        prompt = create_ollama_tool_prompt(original_question, history, tool_results)
+        messages = [HumanMessage(content=prompt)]
+        
+        try:
+            response = ollama_llm.invoke(messages)
+            response_text = response.content.strip()
+            
+            print(f"🤖 Ollama response (iteration {iteration}): {response_text[:200]}...", flush=True)
+            
+            # Try to parse tool call
+            tool_call = parse_ollama_tool_call(response_text)
+            
+            if tool_call:
+                tool_name = tool_call.get("name", "")
+                tool_args = tool_call.get("arguments", {})
+                
+                if isinstance(tool_args, str):
+                    try:
+                        tool_args = json.loads(tool_args)
+                    except:
+                        tool_args = {}
+                
+                # Check for infinite loops
+                if len(tools_used) >= 2 and tools_used[-1] == tool_name and tools_used[-2] == tool_name:
+                    print(f"⚠️  Loop detected: {tool_name} called repeatedly. Forcing answer.", flush=True)
+                    if tool_results:
+                        try:
+                            result_data = json.loads(tool_results)
+                            answer_prompt = f"""Based on this data, answer the user's question: {original_question}
+
+Data: {json.dumps(result_data, indent=2, ensure_ascii=False)[:1500]}
+
+Provide a clear, direct answer. Do not use JSON format. Just answer the question naturally."""
+                            answer_msg = [HumanMessage(content=answer_prompt)]
+                            final_response = ollama_llm.invoke(answer_msg)
+                            return final_response.content, docs
+                        except Exception as e:
+                            print(f"⚠️  Error forcing answer: {e}", flush=True)
+                    return "Based on the data retrieved, I found information but reached the iteration limit. Please try rephrasing your question.", docs
+                
+                # Track tool usage
+                tools_used.append(tool_name)
+                
+                print(f"🔧 Ollama tool call: {tool_name} with args: {tool_args}", flush=True)
+                
+                # Execute tool
+                if tool_name == "search_knowledge_base":
+                    try:
+                        query = tool_args.get("query", original_question)
+                        # Enhance query with original question context if query is too short
+                        if len(query.split()) < 3 and len(original_question.split()) > 3:
+                            # Combine both for better retrieval
+                            enhanced_query = f"{query} {original_question}"
+                        else:
+                            enhanced_query = query
+                        
+                        print(f"🔍 Searching with query: '{enhanced_query}'", flush=True)
+                        # Use enhanced query for better context
+                        docs = fetch_context(enhanced_query, use_mmr=True)
+                        
+                        # Format results with better context
+                        formatted_results = []
+                        for doc in docs:
+                            formatted_results.append({
+                                "content": doc.page_content,
+                                "source": doc.metadata.get("source", "unknown"),
+                                "metadata": doc.metadata
+                            })
+                        
+                        result = {
+                            "query": query,
+                            "original_question": original_question,
+                            "results": formatted_results,
+                            "count": len(docs),
+                            "message": f"Found {len(docs)} relevant document chunks. Read them carefully to find the exact answer."
+                        }
+                        print(f"✅ Tool result: Found {len(docs)} documents", flush=True)
+                    except Exception as e:
+                        result = {"error": str(e), "message": "Error searching knowledge base"}
+                
+                # Format tool result for next iteration
+                tool_results = json.dumps(result, default=str, ensure_ascii=False)
+                
+                # Continue to next iteration with tool results
+                continue
+            else:
+                # No tool call - this might be the final answer, but check if we have context
+                if tool_results and docs:
+                    # We have context, make sure the answer is based on it
+                    try:
+                        result_data = json.loads(tool_results)
+                        if result_data.get("results"):
+                            # Verify answer is reasonable, if not, try to extract from context
+                            answer_prompt = f"""Based on the following context from uploaded documents, answer this question: "{original_question}"
+
+CONTEXT FROM DOCUMENTS:
+{chr(10).join([f"--- Chunk {i+1} ---{chr(10)}{doc.get('content', '')[:400]}" for i, doc in enumerate(result_data.get('results', [])[:3])])}
+
+QUESTION: {original_question}
+
+INSTRUCTIONS:
+1. Read the context above carefully
+2. Find the EXACT answer to the question
+3. If the question asks for a "company name", extract ONLY the company/employer name
+4. Answer directly and concisely - just the requested information
+5. If the answer is not in the context, say "I couldn't find this information"
+
+Your answer:"""
+                            
+                            final_msg = [HumanMessage(content=answer_prompt)]
+                            final_response = ollama_llm.invoke(final_msg)
+                            return final_response.content.strip(), docs
+                    except Exception as e:
+                        print(f"⚠️  Error in final answer refinement: {e}", flush=True)
+                
+                # Return the response as-is
+                return response_text, docs
+                
+        except Exception as e:
+            print(f"❌ Error in Ollama answer: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+            return f"Sorry, an error occurred: {str(e)}", docs
+    
+    # Max iterations reached
+    return "Sorry, maximum iterations reached. Please try rephrasing your question.", docs
