@@ -120,3 +120,150 @@ text_splitter = RecursiveCharacterTextSplitter(
 
 print("\n✅ Upload RAG System ready!")
 print("=" * 60)
+
+def process_pdf(file_content: bytes, filename: str) -> list[Document]:
+    """Extract text from PDF file"""
+    documents = []
+    try:
+        pdf_file = io.BytesIO(file_content)
+        reader = PdfReader(pdf_file)
+        
+        full_text = ""
+        for page_num, page in enumerate(reader.pages):
+            text = page.extract_text()
+            if text:
+                full_text += f"\n\n--- Page {page_num + 1} ---\n\n{text}"
+        
+        if full_text.strip():
+            # Split into chunks
+            chunks = text_splitter.split_text(full_text)
+            
+            for idx, chunk in enumerate(chunks):
+                doc = Document(
+                    page_content=chunk,
+                    metadata={
+                        "source": filename,
+                        "file_type": "pdf",
+                        "chunk_index": idx,
+                        "total_chunks": len(chunks),
+                        "upload_date": datetime.now().isoformat()
+                    }
+                )
+                documents.append(doc)
+        
+        print(f"✅ Processed PDF: {filename} - {len(documents)} chunks")
+    except Exception as e:
+        print(f"❌ Error processing PDF {filename}: {e}")
+        raise
+    
+    return documents
+
+def process_docx(file_content: bytes, filename: str) -> list[Document]:
+    """Extract text from Word document"""
+    if DocxDocument is None:
+        raise ImportError("python-docx is not installed. Please install it with: pip install python-docx")
+    
+    documents = []
+    try:
+        docx_file = io.BytesIO(file_content)
+        doc = DocxDocument(docx_file)
+        
+        full_text = ""
+        for para in doc.paragraphs:
+            if para.text.strip():
+                full_text += para.text + "\n"
+        
+        # Also extract text from tables
+        for table in doc.tables:
+            for row in table.rows:
+                row_text = " | ".join([cell.text.strip() for cell in row.cells])
+                if row_text.strip():
+                    full_text += row_text + "\n"
+        
+        if full_text.strip():
+            # Split into chunks
+            chunks = text_splitter.split_text(full_text)
+            
+            for idx, chunk in enumerate(chunks):
+                doc = Document(
+                    page_content=chunk,
+                    metadata={
+                        "source": filename,
+                        "file_type": "docx",
+                        "chunk_index": idx,
+                        "total_chunks": len(chunks),
+                        "upload_date": datetime.now().isoformat()
+                    }
+                )
+                documents.append(doc)
+        
+        print(f"✅ Processed DOCX: {filename} - {len(documents)} chunks")
+    except Exception as e:
+        print(f"❌ Error processing DOCX {filename}: {e}")
+        raise
+    
+    return documents
+
+def process_txt(file_content: bytes, filename: str) -> list[Document]:
+    """Extract text from plain text file"""
+    documents = []
+    try:
+        text = file_content.decode('utf-8', errors='ignore')
+        
+        if text.strip():
+            # Split into chunks
+            chunks = text_splitter.split_text(text)
+            
+            for idx, chunk in enumerate(chunks):
+                doc = Document(
+                    page_content=chunk,
+                    metadata={
+                        "source": filename,
+                        "file_type": "txt",
+                        "chunk_index": idx,
+                        "total_chunks": len(chunks),
+                        "upload_date": datetime.now().isoformat()
+                    }
+                )
+                documents.append(doc)
+        
+        print(f"✅ Processed TXT: {filename} - {len(documents)} chunks")
+    except Exception as e:
+        print(f"❌ Error processing TXT {filename}: {e}")
+        raise
+    
+    return documents
+
+def process_uploaded_file(file) -> list[Document]:
+    """Process uploaded file based on its extension"""
+    filename = file.filename
+    file_content = file.read()
+    
+    # Determine file type
+    file_ext = Path(filename).suffix.lower()
+    
+    if file_ext == '.pdf':
+        return process_pdf(file_content, filename)
+    elif file_ext in ['.docx', '.doc']:
+        return process_docx(file_content, filename)
+    elif file_ext == '.txt':
+        return process_txt(file_content, filename)
+    else:
+        raise ValueError(f"Unsupported file type: {file_ext}")
+
+def add_documents_to_vectorstore(documents: list[Document]):
+    """Add documents to the vector store"""
+    if not documents:
+        return
+    
+    try:
+        with _vectorstore_lock:
+            # Add documents to existing vectorstore
+            vector_store.add_documents(documents)
+            # Save the updated vectorstore
+            vector_store.save_local(db_name)
+        
+        print(f"✅ Added {len(documents)} document chunks to vectorstore")
+    except Exception as e:
+        print(f"❌ Error adding documents to vectorstore: {e}")
+        raise
