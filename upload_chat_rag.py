@@ -267,3 +267,99 @@ def add_documents_to_vectorstore(documents: list[Document]):
     except Exception as e:
         print(f"❌ Error adding documents to vectorstore: {e}")
         raise
+   
+
+def expand_query(question: str) -> list[str]:
+    """Expand query with synonyms and related terms for better retrieval."""
+    question_lower = question.lower()
+    expanded_queries = [question]  # Always include original
+    
+    # Company/employer related
+    if any(word in question_lower for word in ['company', 'employer', 'work', 'working', 'job', 'current']):
+        if 'company' in question_lower:
+            expanded_queries.append(question.replace('company', 'employer'))
+            expanded_queries.append(question.replace('company', 'workplace'))
+        if 'current' in question_lower:
+            expanded_queries.append(question.replace('current', 'present'))
+            expanded_queries.append(question.replace('currently', 'now'))
+    
+    # Extract key terms
+    key_terms = []
+    important_words = ['company', 'employer', 'work', 'working', 'current', 'name', 'position', 'role', 'job']
+    for word in important_words:
+        if word in question_lower:
+            key_terms.append(word)
+    
+    # Create focused queries with key terms
+    if key_terms:
+        focused_query = " ".join(key_terms)
+        if focused_query not in expanded_queries:
+            expanded_queries.append(focused_query)
+    
+    return expanded_queries
+
+def fetch_context(question: str, use_mmr: bool = True) -> list[Document]:
+    """Retrieve relevant context documents for a question with improved retrieval."""
+    try:
+        with _vectorstore_lock:
+            all_docs = []
+            seen_content = set()
+            
+            # Try multiple query variations
+            expanded_queries = expand_query(question)
+            
+            for query in expanded_queries[:3]:  # Limit to top 3 variations
+                try:
+                    if use_mmr:
+                        docs = vector_store.max_marginal_relevance_search(
+                            query, 
+                            k=RETRIEVAL_K,
+                            fetch_k=min(RETRIEVAL_K * 3, 30)  # Increased fetch_k for better diversity
+                        )
+                    else:
+                        docs = vector_store.similarity_search(query, k=RETRIEVAL_K)
+                    
+                    # Deduplicate by content
+                    for doc in docs:
+                        content_hash = hash(doc.page_content[:100])  # Hash first 100 chars
+                        if content_hash not in seen_content:
+                            seen_content.add(content_hash)
+                            all_docs.append(doc)
+                except Exception as e:
+                    print(f"⚠️  Error with query '{query}': {e}", flush=True)
+                    continue
+            
+            # Sort by relevance (if we have scores, otherwise keep order)
+            # Limit to top K documents
+            final_docs = all_docs[:RETRIEVAL_K * 2]  # Get more candidates
+            
+            print(f"🔍 Retrieved {len(final_docs)} unique documents from {len(expanded_queries)} query variations", flush=True)
+            return final_docs
+    except Exception as e:
+        print(f"❌ Error in fetch_context: {str(e)}", flush=True)
+        return []
+
+def rewrite_query_with_context(question: str, history: list[dict] = []) -> str:
+    """Rewrite the current question to be self-contained using minimal context from history."""
+    if not history:
+        return question
+    
+    recent_context = []
+    for msg in history[-4:]:
+        if msg.get("role") == "user":
+            recent_context.append(f"Previous question: {msg.get('content', '')}")
+        elif msg.get("role") == "assistant":
+            recent_context.append(f"Previous answer: {msg.get('content', '')[:200]}")
+    
+    pronouns = ["it", "its", "this", "that", "they", "them", "these", "those", "the", "which"]
+    question_lower = question.lower()
+    needs_context = any(pronoun in question_lower for pronoun in pronouns) or len(question.split()) < 5
+    
+    if needs_context and recent_context:
+        context_str = " ".join(recent_context[-2:])
+        rewritten = f"{context_str} {question}"
+        if len(rewritten) > 200:
+            rewritten = question
+        return rewritten
+    else:
+        return question
