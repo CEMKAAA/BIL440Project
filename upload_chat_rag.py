@@ -760,3 +760,763 @@ Your answer:"""
     
     # Max iterations reached
     return "Sorry, maximum iterations reached. Please try rephrasing your question.", docs
+
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document RAG Chatbot</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            height: 100vh;
+            margin: 0;
+            padding: 20px;
+            overflow: hidden;
+        }
+        
+        .main-container {
+            display: flex;
+            width: 100%;
+            height: 100%;
+            gap: 20px;
+            justify-content: center;
+            align-items: center;
+        }
+        
+        .chat-container {
+            width: 100%;
+            max-width: 600px;
+            height: 100%;
+            max-height: 90vh;
+            background: #f0f2f5;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        
+        .chat-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        
+        .avatar {
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            background: rgba(255,255,255,0.2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            font-weight: bold;
+        }
+        
+        .header-info h1 {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 3px;
+        }
+        
+        .header-info p {
+            font-size: 13px;
+            opacity: 0.9;
+        }
+        
+        .upload-btn {
+            background: rgba(255,255,255,0.2);
+            border: 1px solid rgba(255,255,255,0.3);
+            color: white;
+            padding: 8px 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s;
+        }
+        
+        .upload-btn:hover {
+            background: rgba(255,255,255,0.3);
+        }
+        
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            background: #efeae2;
+            background-image: 
+                repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,.03) 2px, rgba(0,0,0,.03) 4px);
+        }
+        
+        .chat-messages::-webkit-scrollbar {
+            width: 6px;
+        }
+        
+        .chat-messages::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        
+        .chat-messages::-webkit-scrollbar-thumb {
+            background: rgba(0,0,0,0.2);
+            border-radius: 3px;
+        }
+        
+        .message {
+            margin-bottom: 15px;
+            display: flex;
+            animation: slideIn 0.3s ease-out;
+        }
+        
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        .message.user {
+            justify-content: flex-end;
+        }
+        
+        .message-bubble {
+            max-width: 75%;
+            padding: 10px 15px;
+            border-radius: 18px;
+            word-wrap: break-word;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+        }
+        
+        .message.user .message-bubble {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-bottom-right-radius: 4px;
+        }
+        
+        .message.bot .message-bubble {
+            background: white;
+            color: #111b21;
+            border-bottom-left-radius: 4px;
+        }
+        
+        .message-time {
+            font-size: 11px;
+            opacity: 0.7;
+            margin-top: 5px;
+            text-align: right;
+        }
+        
+        .message.bot .message-time {
+            text-align: left;
+        }
+        
+        .typing-indicator {
+            display: none;
+            padding: 10px 15px;
+            background: white;
+            border-radius: 18px;
+            border-bottom-left-radius: 4px;
+            max-width: 75px;
+        }
+        
+        .typing-indicator.active {
+            display: block;
+        }
+        
+        .typing-dots {
+            display: flex;
+            gap: 4px;
+        }
+        
+        .typing-dots span {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #999;
+            animation: typing 1.4s infinite;
+        }
+        
+        .typing-dots span:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+        
+        .typing-dots span:nth-child(3) {
+            animation-delay: 0.4s;
+        }
+        
+        @keyframes typing {
+            0%, 60%, 100% {
+                transform: translateY(0);
+                opacity: 0.7;
+            }
+            30% {
+                transform: translateY(-10px);
+                opacity: 1;
+            }
+        }
+        
+        .chat-input-container {
+            background: #f0f2f5;
+            padding: 15px;
+            border-top: 1px solid rgba(0,0,0,0.1);
+        }
+        
+        .chat-input-wrapper {
+            display: flex;
+            gap: 10px;
+            align-items: flex-end;
+            background: white;
+            border-radius: 25px;
+            padding: 8px 15px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        
+        .chat-input {
+            flex: 1;
+            border: none;
+            outline: none;
+            font-size: 15px;
+            font-family: inherit;
+            resize: none;
+            max-height: 100px;
+            padding: 8px 0;
+            background: transparent;
+        }
+        
+        .send-button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border: none;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            color: white;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: transform 0.2s, box-shadow 0.2s;
+            flex-shrink: 0;
+        }
+        
+        .send-button:hover {
+            transform: scale(1.05);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+        
+        .send-button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .welcome-message {
+            text-align: center;
+            padding: 40px 20px;
+            color: #667eea;
+        }
+        
+        .welcome-message h2 {
+            font-size: 24px;
+            margin-bottom: 10px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .welcome-message p {
+            color: #666;
+            font-size: 14px;
+        }
+        
+        .upload-modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .upload-modal.active {
+            display: flex;
+        }
+        
+        .upload-modal-content {
+            background: white;
+            border-radius: 20px;
+            padding: 30px;
+            max-width: 500px;
+            width: 90%;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+        
+        .upload-modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        
+        .upload-modal-header h2 {
+            color: #667eea;
+        }
+        
+        .close-btn {
+            background: none;
+            border: none;
+            font-size: 24px;
+            cursor: pointer;
+            color: #999;
+        }
+        
+        .file-upload-area {
+            border: 2px dashed #667eea;
+            border-radius: 12px;
+            padding: 40px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-bottom: 20px;
+        }
+        
+        .file-upload-area:hover {
+            background: #f8f9fa;
+            border-color: #764ba2;
+        }
+        
+        .file-upload-area.dragover {
+            background: #f0f2f5;
+            border-color: #764ba2;
+        }
+        
+        .file-input {
+            display: none;
+        }
+        
+        .upload-button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 16px;
+            width: 100%;
+            margin-top: 10px;
+        }
+        
+        .upload-button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .upload-status {
+            margin-top: 15px;
+            padding: 10px;
+            border-radius: 8px;
+            display: none;
+        }
+        
+        .upload-status.success {
+            background: #d4edda;
+            color: #155724;
+            display: block;
+        }
+        
+        .upload-status.error {
+            background: #f8d7da;
+            color: #721c24;
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div class="main-container">
+        <div class="chat-container">
+            <div class="chat-header">
+                <div class="header-left">
+                    <div class="avatar">🤖</div>
+                    <div class="header-info">
+                        <h1>Document RAG Assistant</h1>
+                        <p>Upload documents and ask questions</p>
+                    </div>
+                </div>
+                <button class="upload-btn" onclick="showUploadModal()">📄 Upload</button>
+            </div>
+            
+            <div class="chat-messages" id="chatMessages">
+                <div class="welcome-message">
+                    <h2>👋 Welcome!</h2>
+                    <p>Upload documents (PDF, Word, TXT) and ask questions about them.</p>
+                </div>
+            </div>
+        
+            <div class="typing-indicator" id="typingIndicator">
+                <div class="typing-dots">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </div>
+            </div>
+            
+            <div class="chat-input-container">
+                <div class="chat-input-wrapper">
+                    <textarea 
+                        class="chat-input" 
+                        id="messageInput" 
+                        placeholder="Ask a question about your documents..."
+                        rows="1"
+                        onkeydown="handleKeyDown(event)"
+                    ></textarea>
+                    <button class="send-button" id="sendButton" onclick="sendMessage()">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="22" y1="2" x2="11" y2="13"></line>
+                            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="upload-modal" id="uploadModal">
+        <div class="upload-modal-content">
+            <div class="upload-modal-header">
+                <h2>Upload Document</h2>
+                <button class="close-btn" onclick="hideUploadModal()">×</button>
+            </div>
+            <div class="file-upload-area" id="fileUploadArea" onclick="document.getElementById('fileInput').click()">
+                <p>📄 Click or drag files here</p>
+                <p style="font-size: 12px; color: #999; margin-top: 10px;">Supports PDF, Word (.docx), and TXT files</p>
+            </div>
+            <input type="file" id="fileInput" class="file-input" accept=".pdf,.docx,.doc,.txt" onchange="handleFileSelect(event)">
+            <button class="upload-button" id="uploadButton" onclick="uploadFile()" disabled>Upload</button>
+            <div class="upload-status" id="uploadStatus"></div>
+        </div>
+    </div>
+
+    <script>
+        let chatHistory = [];
+        let selectedFile = null;
+        
+        function handleKeyDown(event) {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                sendMessage();
+            }
+        }
+        
+        function autoResize(textarea) {
+            textarea.style.height = 'auto';
+            textarea.style.height = Math.min(textarea.scrollHeight, 100) + 'px';
+        }
+        
+        document.getElementById('messageInput').addEventListener('input', function() {
+            autoResize(this);
+        });
+        
+        function addMessage(content, isUser) {
+            const messagesDiv = document.getElementById('chatMessages');
+            const welcomeMsg = messagesDiv.querySelector('.welcome-message');
+            if (welcomeMsg) {
+                welcomeMsg.remove();
+            }
+            
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${isUser ? 'user' : 'bot'}`;
+            
+            const time = new Date().toLocaleTimeString('en-US', { 
+                hour: '2-digit', 
+                minute: '2-digit' 
+            });
+            
+            messageDiv.innerHTML = `
+                <div class="message-bubble">
+                    ${content.replace(/\\n/g, '<br>')}
+                    <div class="message-time">${time}</div>
+                </div>
+            `;
+            
+            messagesDiv.appendChild(messageDiv);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+        
+        function showTyping() {
+            const typingIndicator = document.getElementById('typingIndicator');
+            const messagesDiv = document.getElementById('chatMessages');
+            typingIndicator.classList.add('active');
+            messagesDiv.appendChild(typingIndicator);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+        
+        function hideTyping() {
+            const typingIndicator = document.getElementById('typingIndicator');
+            typingIndicator.classList.remove('active');
+        }
+        
+        async function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const message = input.value.trim();
+            const sendButton = document.getElementById('sendButton');
+            
+            if (!message) return;
+            
+            input.disabled = true;
+            sendButton.disabled = true;
+            
+            addMessage(message, true);
+            chatHistory.push({ role: 'user', content: message });
+            
+            input.value = '';
+            input.style.height = 'auto';
+            
+            showTyping();
+            
+            try {
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        message: message,
+                        history: chatHistory
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.error) {
+                    addMessage('Sorry, an error occurred: ' + data.error, false);
+                } else {
+                    addMessage(data.response, false);
+                    chatHistory.push({ role: 'assistant', content: data.response });
+                }
+            } catch (error) {
+                addMessage('Connection error: ' + error.message, false);
+            } finally {
+                hideTyping();
+                input.disabled = false;
+                sendButton.disabled = false;
+                input.focus();
+            }
+        }
+        
+        function showUploadModal() {
+            document.getElementById('uploadModal').classList.add('active');
+        }
+        
+        function hideUploadModal() {
+            document.getElementById('uploadModal').classList.remove('active');
+            selectedFile = null;
+            document.getElementById('fileInput').value = '';
+            document.getElementById('uploadButton').disabled = true;
+            document.getElementById('uploadStatus').classList.remove('success', 'error');
+            document.getElementById('uploadStatus').style.display = 'none';
+        }
+        
+        function handleFileSelect(event) {
+            selectedFile = event.target.files[0];
+            if (selectedFile) {
+                document.getElementById('uploadButton').disabled = false;
+                document.getElementById('fileUploadArea').innerHTML = `
+                    <p>📄 ${selectedFile.name}</p>
+                    <p style="font-size: 12px; color: #999; margin-top: 10px;">${(selectedFile.size / 1024 / 1024).toFixed(2)} MB</p>
+                `;
+            }
+        }
+        
+        // Drag and drop
+        const fileUploadArea = document.getElementById('fileUploadArea');
+        
+        fileUploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            fileUploadArea.classList.add('dragover');
+        });
+        
+        fileUploadArea.addEventListener('dragleave', () => {
+            fileUploadArea.classList.remove('dragover');
+        });
+        
+        fileUploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            fileUploadArea.classList.remove('dragover');
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                selectedFile = files[0];
+                document.getElementById('fileInput').files = files;
+                document.getElementById('uploadButton').disabled = false;
+                fileUploadArea.innerHTML = `
+                    <p>📄 ${selectedFile.name}</p>
+                    <p style="font-size: 12px; color: #999; margin-top: 10px;">${(selectedFile.size / 1024 / 1024).toFixed(2)} MB</p>
+                `;
+            }
+        });
+        
+        async function uploadFile() {
+            if (!selectedFile) return;
+            
+            const uploadButton = document.getElementById('uploadButton');
+            const uploadStatus = document.getElementById('uploadStatus');
+            
+            uploadButton.disabled = true;
+            uploadButton.textContent = 'Uploading...';
+            uploadStatus.style.display = 'none';
+            
+            const formData = new FormData();
+            formData.append('file', selectedFile);
+            
+            try {
+                const response = await fetch('/api/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (data.error) {
+                    uploadStatus.textContent = 'Error: ' + data.error;
+                    uploadStatus.classList.remove('success');
+                    uploadStatus.classList.add('error');
+                } else {
+                    uploadStatus.textContent = `Success! Document "${data.filename}" uploaded and processed. ${data.chunks} chunks added to knowledge base.`;
+                    uploadStatus.classList.remove('error');
+                    uploadStatus.classList.add('success');
+                    selectedFile = null;
+                    document.getElementById('fileInput').value = '';
+                    
+                    setTimeout(() => {
+                        hideUploadModal();
+                    }, 2000);
+                }
+            } catch (error) {
+                uploadStatus.textContent = 'Error: ' + error.message;
+                uploadStatus.classList.remove('success');
+                uploadStatus.classList.add('error');
+            } finally {
+                uploadButton.disabled = false;
+                uploadButton.textContent = 'Upload';
+            }
+        }
+        
+        window.addEventListener('load', () => {
+            document.getElementById('messageInput').focus();
+        });
+    </script>
+</body>
+</html>
+"""
+
+@app.route('/')
+def index():
+    """Main chat page."""
+    return render_template_string(HTML_TEMPLATE)
+
+@app.route('/api/upload', methods=['POST'])
+def upload_file():
+    """Handle file upload and process it."""
+    try:
+        if 'file' not in request.files:
+            return jsonify({'error': 'No file provided'}), 400
+        
+        file = request.files['file']
+        
+        if file.filename == '':
+            return jsonify({'error': 'No file selected'}), 400
+        
+        # Process the file
+        documents = process_uploaded_file(file)
+        
+        if not documents:
+            return jsonify({'error': 'No content extracted from file'}), 400
+        
+        # Add to vectorstore
+        add_documents_to_vectorstore(documents)
+        
+        # Save file to disk (optional)
+        file_path = os.path.join(app.config['UPLOAD_FOLDER'], file.filename)
+        file.seek(0)  # Reset file pointer
+        file.save(file_path)
+        
+        return jsonify({
+            'success': True,
+            'filename': file.filename,
+            'chunks': len(documents),
+            'message': f'Document processed successfully. {len(documents)} chunks added to knowledge base.'
+        })
+        
+    except Exception as e:
+        print(f"❌ Error in upload endpoint: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/chat', methods=['POST'])
+def chat():
+    """Handle chat messages."""
+    try:
+        data = request.json
+        message = data.get('message', '').strip()
+        history = data.get('history', [])
+        
+        if not message:
+            return jsonify({'error': 'Message cannot be empty'}), 400
+        
+        # Get response from RAG system
+        response, docs = answer_question_with_ollama(message, history)
+        
+        # Include source information for debugging
+        sources_info = []
+        for doc in docs[:3]:  # Top 3 sources
+            sources_info.append({
+                'source': doc.metadata.get('source', 'unknown'),
+                'preview': doc.page_content[:100] + '...' if len(doc.page_content) > 100 else doc.page_content
+            })
+        
+        return jsonify({
+            'response': response,
+            'sources': len(docs),
+            'sources_info': sources_info
+        })
+    except Exception as e:
+        print(f"❌ Error in chat endpoint: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+if __name__ == '__main__':
+    print("\n" + "=" * 60)
+    print("💬 Starting Upload RAG Chatbot Server")
+    print("=" * 60)
+    print("📍 Open http://127.0.0.1:5001 in your browser")
+    print("=" * 60 + "\n")
+    
+    app.run(host='127.0.0.1', port=5001, debug=False, threaded=True)
