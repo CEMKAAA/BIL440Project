@@ -72,3 +72,51 @@ If you don't know the answer, say so.
 Context:
 {context}
 """
+print("=" * 60)
+print("💬 Upload RAG Chatbot - Initializing")
+print("=" * 60)
+
+# Initialize embeddings
+print(f"\n⏳ Loading embedding model: {EMBEDDING_MODEL}...")
+embeddings = HuggingFaceEmbeddings(
+    model_name=EMBEDDING_MODEL,
+    model_kwargs={'device': device},
+    encode_kwargs={'normalize_embeddings': True}
+)
+print("✅ Embedding model loaded")
+
+# Load or create vectorstore
+print(f"\n💾 Loading vectorstore: {db_name}...")
+vector_store = None
+if os.path.exists(db_name) and os.path.exists(os.path.join(db_name, "index.faiss")):
+    try:
+        vector_store = FAISS.load_local(
+            folder_path=db_name,
+            embeddings=embeddings,
+            allow_dangerous_deserialization=True
+        )
+        doc_count = len(vector_store.docstore._dict)
+        print(f"✅ Vectorstore loaded ({doc_count} documents)")
+    except Exception as e:
+        print(f"⚠️  Error loading vectorstore: {e}. Creating new one.")
+        vector_store = FAISS.from_texts([""], embeddings)
+        vector_store.save_local(db_name)
+        print("✅ New vectorstore created")
+else:
+    print("📝 Creating new vectorstore...")
+    vector_store = FAISS.from_texts([""], embeddings)
+    vector_store.save_local(db_name)
+    print("✅ New vectorstore created")
+
+# Thread lock for vectorstore operations
+_vectorstore_lock = threading.Lock()
+
+# Text splitter
+text_splitter = RecursiveCharacterTextSplitter(
+    chunk_size=1000,
+    chunk_overlap=200,
+    length_function=len,
+)
+
+print("\n✅ Upload RAG System ready!")
+print("=" * 60)
